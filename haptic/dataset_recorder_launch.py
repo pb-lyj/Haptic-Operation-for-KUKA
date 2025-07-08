@@ -33,7 +33,7 @@ class LaunchControlledRecorder(Node):
         self.recording_active = False
         self.recorder = None
         
-        # 显示启动信息
+        # 显示启动信息git 
         self.get_logger().info("=" * 60)
         self.get_logger().info("🚀 数据采集器已启动并等待指令")
         self.get_logger().info("=" * 60)
