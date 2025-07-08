@@ -1,7 +1,7 @@
 # haptic  ros2 package
 
 This ROS package is designed for tactile robotics experiments on a KUKA robot. 
-# Deoendence
+# Dependence
 Its main dependencies include:
 - ubuntu 24.04
 - ros2-jazzy
@@ -16,6 +16,7 @@ Its main dependencies include:
 	sudo apt install ros-jazzy-ros-gz
 	```
 - LBR
+
 	https://github.com/lbr-stack/lbr_fri_ros2_stack
 
 # Function
@@ -83,12 +84,12 @@ ros2 launch haptic teach_record.py
 If the system is functioning properly, you won't see any error, and the following will appear on the screen:
 ```
 ============================================================
-🚀 数据采集器已启动并等待指令
+🚀 The data collector is up and waiting for instructions
 ============================================================
-📝 指令说明:
-输入 '1' + Enter: 开始数据采集
-输入 '2' + Enter: 停止数据采集
-输入 'q' + Enter: 退出程序
+📝 Instruction Description:
+enter '1' + Enter: Start data collection
+enter '2' + Enter: Stop data collection
+enter 'q' + Enter: Quit the program
 ============================================================
-⏳ 等待您的指令...
+⏳ Waiting for your command...
 ```
