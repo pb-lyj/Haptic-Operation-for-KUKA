@@ -45,7 +45,8 @@ This will start the robotic arm information broadcast at the same time.
 ## Tac3D Sensor
 
 - Confirm the Serial number of Sensor
-	:exclamation: The camera serial number may be related to the time and location of the USB device plugged in, and we recommend that you check it in after it is plugged in
+
+	:black_circle: The camera serial number may be related to the time and location of the USB device plugged in, and we recommend that you check it in after it is plugged in
 	```
 	v4l2-ctl --list-devices
 	```
