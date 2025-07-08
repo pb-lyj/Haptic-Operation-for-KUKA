@@ -33,7 +33,7 @@ Its main dependencies include:
 	    --params-file ros2 pkg prefix
 lbr_demos_advanced_py/share/lbr_demos_advanced_py/config/admittance_control.yaml
 ```
-:red_circle:Executing this command may cause the robotic arm to enter impedance mode
+:red_circle: Executing this command may cause the robotic arm to enter impedance mode
 This will start the robotic arm information broadcast at the same time.
 
 - Moving the robotic arm to its original position
@@ -45,7 +45,7 @@ This will start the robotic arm information broadcast at the same time.
 ## Tac3D Sensor
 
 - Confirm the Serial number of Sensor
-	:exclamation:The camera serial number may be related to the time and location of the USB device plugged in, and we recommend that you check it in after it is plugged in
+	:exclamation: The camera serial number may be related to the time and location of the USB device plugged in, and we recommend that you check it in after it is plugged in
 	```
 	v4l2-ctl --list-devices
 	```
