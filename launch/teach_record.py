@@ -14,7 +14,7 @@ def generate_launch_description():
         # 启动机械臂 bringup（非仿真）
         ExecuteProcess(
             cmd=[
-                'ros2', 'launch', 'lbr_bringup', 'bringup.launch.py',
+                'ros2', 'launch', 'lbr_bringup', 'hardware.launch.py',
                 'sim:=false',
                 'ctrl:=lbr_joint_position_command_controller',
                 'model:=iiwa14'
@@ -43,7 +43,7 @@ def generate_launch_description():
         # 启动 Tac3D 后端服务进程（C++运行库）
         ExecuteProcess(
             cmd=[
-                './Tac3D', '-c', 'config/A1-0040R', '-d', '2', '-i', '127.0.0.1', '-p', '9988'
+                './Tac3D', '-c', 'config/A1-0041L', '-d', '2', '-i', '127.0.0.1', '-p', '9988'
             ],
             cwd='/home/lyj/robot_space_2/ros2_driver_layer/src/Tac3D-v3.1.3-linux',
             shell=True,
@@ -52,7 +52,7 @@ def generate_launch_description():
         
         ExecuteProcess(
             cmd=[
-                './Tac3D', '-c', 'config/A1-0041L', '-d', '2', '-i', '127.0.0.1', '-p', '9989'
+                './Tac3D', '-c', 'config/A1-0040R', '-d', '4', '-i', '127.0.0.1', '-p', '9989'
             ],
             cwd='/home/lyj/robot_space_2/ros2_driver_layer/src/Tac3D-v3.1.3-linux',
             shell=True,

@@ -145,7 +145,7 @@ class Tac3DPublisher(Node):
         time.sleep(5)  # 等待 5 秒钟
 
         # 发送一次校准信号（确保传感器未与任何物体接触！）
-        self.sensor.calibrate('A1-0040R')
+        self.sensor.calibrate('A1-0041L')
 
         time.sleep(5)  # 等待 5 秒钟
 

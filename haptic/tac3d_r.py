@@ -35,7 +35,7 @@ class Tac3DPublisher(Node):
         self.publisher_index = self.create_publisher(Float32, 'index_r', 10)  # 索引数据
         
         # 传感器初始化
-        self.sensor = Sensor(recvCallback=self.Tac3DRecvCallback, port=9988)
+        self.sensor = Sensor(recvCallback=self.Tac3DRecvCallback, port=9989)
 
 
     def Tac3DRecvCallback(self, frame, param):
