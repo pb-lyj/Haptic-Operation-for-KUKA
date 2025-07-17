@@ -29,10 +29,7 @@ Its main dependencies include:
     model:=iiwa14 # [iiwa7, iiwa14, med7, med14]
 ```
 ```
-	ros2 run lbr_demos_advanced_py admittance_control --ros-args \
-    -r __ns:=/lbr \
-	    --params-file ros2 pkg prefix
-lbr_demos_advanced_py/share/lbr_demos_advanced_py/config/admittance_control.yaml
+ros2 run lbr_demos_advanced_py admittance_control --ros-args   -r __ns:=/lbr   --params-file $(ros2 pkg prefix lbr_demos_advanced_py)/share/lbr_demos_advanced_py/config/admittance_control.yaml
 ```
 :red_circle: Executing this command may cause the robotic arm to enter impedance mode
 This will start the robotic arm information broadcast at the same time.
