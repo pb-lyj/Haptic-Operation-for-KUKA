@@ -1,500 +1,545 @@
 import os
 import rclpy
 from rclpy.node import Node
-from rclpy.serialization import serialize_message
-from lbr_fri_idl.msg import LBRJointPositionCommand, LBRState
+from lbr_fri_idl.msg import LBRWrenchCommand, LBRState
 from sensor_msgs.msg import JointState
 from tutorial_interfaces.msg import Array3, Cloud
 from std_msgs.msg import Float32
-import rosbag2_py
 from datetime import datetime
-from collections import deque
-import json
 import csv
 import threading
 
-def open_writer(writer, abs_dir_path):
-    storage_options = rosbag2_py._storage.StorageOptions(
-        uri=abs_dir_path,
-        storage_id='sqlite3')
-    converter_options = rosbag2_py._storage.ConverterOptions('', '')
-    writer.open(storage_options, converter_options)
+import os
+import rclpy
+from rclpy.node import Node
+from lbr_fri_idl.msg import LBRWrenchCommand, LBRState
+from sensor_msgs.msg import JointState
+from tutorial_interfaces.msg import Array3, Cloud
+from std_msgs.msg import Float32
+from datetime import datetime
+import csv
+import threading
+import uuid
+import time
 
-class AdvancedSyncBagRecorder(Node):
-    """使用时间窗口进行精确同步的数据记录器，同时记录原始数据和时间戳"""
-    def __init__(self, sync_window_ms=50):
-        super().__init__('advanced_dataset_recorder')
-        self.writer = rosbag2_py.SequentialWriter()
-        self.sync_window_ns = sync_window_ms * 1e6  # 转换为纳秒
-        
-        # 使用缓冲区存储多个消息，用于时间同步
-        self.msg_buffers = {}
-        self.buffer_size = 100  # 每个话题保存最近100条消息
+class DatasetRecorder(Node):
+    """简单的数据记录器，记录各个话题的数据和到达时间戳"""
+    def __init__(self):
+        super().__init__('dataset_recorder')
         
         # 创建唯一目录结构
         current_workspace_path = os.getcwd()
         base_dir = os.path.join(current_workspace_path, 'training_data')
-        unique_dir_name = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.unique_dir = os.path.join(base_dir, 'sync_recorder', unique_dir_name)
         
-        # 创建目录结构
+        now = datetime.now()
+        timestamp = now.strftime('%Y%m%d_%H%M%S_%f')[:-3]  # 包含毫秒
+        process_id = os.getpid()
+        unique_id = str(uuid.uuid4())[:8]
+        unique_dir_name = f"{timestamp}_{process_id}_{unique_id}"
+        
+        self.unique_dir = os.path.join(base_dir, 'dataset_recorder', unique_dir_name)
         os.makedirs(self.unique_dir, exist_ok=True)
-        
-        # 创建子目录
-        self.rosbag_dir = os.path.join(self.unique_dir, 'rosbag')
-        self.raw_data_dir = os.path.join(self.unique_dir, 'raw_data')
-        self.analysis_dir = os.path.join(self.unique_dir, 'analysis')
-        
-        os.makedirs(self.rosbag_dir, exist_ok=True)
-        os.makedirs(self.raw_data_dir, exist_ok=True)
-        os.makedirs(self.analysis_dir, exist_ok=True)
-        
-        # 初始化rosbag写入器
-        open_writer(self.writer, self.rosbag_dir)
-        
-        # 创建原始数据记录文件
-        self.raw_data_files = {}
-        self.timing_file = open(os.path.join(self.analysis_dir, 'timing_analysis.csv'), 'w', newline='')
-        self.timing_writer = csv.writer(self.timing_file)
-        self.timing_writer.writerow([
-            'timestamp', 'topic_name', 'receive_time', 'header_time', 
-            'sync_group_id', 'time_diff_from_sync_target', 'data_summary'
-        ])
-        
-        # 同步统计文件
-        self.sync_stats_file = open(os.path.join(self.analysis_dir, 'sync_statistics.csv'), 'w', newline='')
-        self.sync_stats_writer = csv.writer(self.sync_stats_file)
-        self.sync_stats_writer.writerow([
-            'sync_group_id', 'sync_target_time', 'max_time_diff_ms', 
-            'num_topics_synced', 'sync_quality', 'timestamp'
-        ])
         
         # 线程锁，确保文件写入安全
         self.file_lock = threading.Lock()
-        self.sync_group_counter = 0
-
+        
+        # 话题类型定义
         self.topic_types = {
             # 机器人相关话题
-            '/lbr/command/joint_position': 'lbr_fri_idl/msg/LBRJointPositionCommand',
+            '/lbr/command/wrench': 'lbr_fri_idl/msg/LBRWrenchCommand',
             '/lbr/state': 'lbr_fri_idl/msg/LBRState',
             '/lbr/joint_states': 'sensor_msgs/msg/JointState',
             
-            # Tac3D传感器话题
+            # Tac3D传感器话题 - 根据修改后的tac3d_r和tac3d_l更新
             '/positions_r': 'tutorial_interfaces/msg/Cloud',
             '/displacements_r': 'tutorial_interfaces/msg/Cloud',
-            '/forces_r': 'tutorial_interfaces/msg/Array3',
-            '/resultant_force_r': 'tutorial_interfaces/msg/Cloud',
-            '/resultant_moment_r': 'tutorial_interfaces/msg/Cloud',
+            '/forces_r': 'tutorial_interfaces/msg/Cloud',  # 修改为Cloud类型
+            '/resultant_force_r': 'tutorial_interfaces/msg/Array3',  # 修改为Array3类型
+            '/resultant_moment_r': 'tutorial_interfaces/msg/Array3',  # 修改为Array3类型
             '/index_r': 'std_msgs/msg/Float32',
             
             '/positions_l': 'tutorial_interfaces/msg/Cloud',
             '/displacements_l': 'tutorial_interfaces/msg/Cloud',
-            '/forces_l': 'tutorial_interfaces/msg/Array3',
-            '/resultant_force_l': 'tutorial_interfaces/msg/Cloud',
-            '/resultant_moment_l': 'tutorial_interfaces/msg/Cloud',
+            '/forces_l': 'tutorial_interfaces/msg/Cloud',  # 修改为Cloud类型
+            '/resultant_force_l': 'tutorial_interfaces/msg/Array3',  # 修改为Array3类型
+            '/resultant_moment_l': 'tutorial_interfaces/msg/Array3',  # 修改为Array3类型
             '/index_l': 'std_msgs/msg/Float32'
         }
-
-        # 初始化消息缓冲区和原始数据文件
-        for topic_name in self.topic_types.keys():
-            self.msg_buffers[topic_name] = []
-            
-            # 为每个话题创建原始数据记录文件
-            safe_topic_name = topic_name.replace('/', '_')
-            raw_file_path = os.path.join(self.raw_data_dir, f'{safe_topic_name}_raw.csv')
-            self.raw_data_files[topic_name] = open(raw_file_path, 'w', newline='')
-            
-            # 创建CSV写入器并写入头部
-            writer = csv.writer(self.raw_data_files[topic_name])
-            if 'Array3' in self.topic_types[topic_name]:
-                writer.writerow(['timestamp', 'receive_time', 'header_time', 'x', 'y', 'z'])
-            elif 'Cloud' in self.topic_types[topic_name]:
-                writer.writerow(['timestamp', 'receive_time', 'header_time', 'num_points', 'sample_points'])
-            elif 'Float32' in self.topic_types[topic_name]:
-                writer.writerow(['timestamp', 'receive_time', 'header_time', 'value'])
-            else:
-                writer.writerow(['timestamp', 'receive_time', 'header_time', 'data_summary'])
-
-        self._subscriptions = []
-
-        self.get_logger().info(f"数据将保存到: {self.unique_dir}")
-        self.get_logger().info(f"- ROS bag: {self.rosbag_dir}")
-        self.get_logger().info(f"- 原始数据: {self.raw_data_dir}")
-        self.get_logger().info(f"- 分析文件: {self.analysis_dir}")
-
-        topic_id = 0
+        
+        # 为每个话题创建数据文件 - 全部使用txt格式
+        self.data_files = {}
+        
         for topic_name, topic_type in self.topic_types.items():
-            topic_info = rosbag2_py._storage.TopicMetadata(
-                id=topic_id,
-                name=topic_name,
-                type=topic_type,
-                serialization_format='cdr')
-            self.writer.create_topic(topic_info)
-            topic_id += 1
-
-            msg_type = eval(topic_type.split('/')[2])
-
+            # 创建安全的文件名
+            safe_topic_name = topic_name.replace('/', '_').replace(':', '_')
+            
+            # 所有文件都使用txt格式
+            file_path = os.path.join(self.unique_dir, f'{safe_topic_name}.txt')
+            self.data_files[topic_name] = open(file_path, 'w')
+        
+        # 创建订阅
+        self._subscriptions = []
+        
+        # 为每个话题创建订阅
+        for topic_name, topic_type in self.topic_types.items():
+            msg_type = eval(topic_type.split('/')[-1])
+            
             self._subscriptions.append(self.create_subscription(
                 msg_type,
                 topic_name,
-                self.buffered_callback(topic_name),
+                self.create_callback(topic_name),
                 10
             ))
-
-        # 使用更高频率进行同步处理
-        self.timer = self.create_timer(0.02, self.sync_and_write)  # 50Hz
-
-    def buffered_callback(self, topic_name):
-        """创建带缓冲的回调函数，同时记录原始数据"""
+        
+        self.get_logger().info(f"数据记录器已启动，数据将保存到: {self.unique_dir}")
+        self.get_logger().info(f"监控 {len(self.topic_types)} 个话题")
+        
+    def create_callback(self, topic_name):
+        """为指定话题创建回调函数"""
         def callback(msg):
             receive_time = self.get_clock().now().nanoseconds
             
             # 获取消息时间戳
+            header_time = None
             if hasattr(msg, 'header') and hasattr(msg.header, 'stamp'):
-                msg_time = msg.header.stamp.sec * 1e9 + msg.header.stamp.nanosec
-                header_time = msg_time
-            else:
-                msg_time = receive_time
-                header_time = None
+                header_time = msg.header.stamp.sec * 1e9 + msg.header.stamp.nanosec
             
-            # 添加到缓冲区
-            msg_entry = {
-                'msg': msg,
-                'timestamp': msg_time,
-                'receive_time': receive_time,
-                'header_time': header_time
-            }
+            # 根据消息类型使用不同的写入方式
+            topic_type = self.topic_types[topic_name]
             
-            self.msg_buffers[topic_name].append(msg_entry)
-            
-            # 保持缓冲区大小
-            if len(self.msg_buffers[topic_name]) > self.buffer_size:
-                self.msg_buffers[topic_name].pop(0)
-            
-            # 记录原始数据到CSV文件
-            self.record_raw_data(topic_name, msg, receive_time, header_time)
+            with self.file_lock:
+                if 'Cloud' in topic_type:
+                    # Cloud类型写入txt格式
+                    self.write_cloud_data(topic_name, msg, receive_time, header_time)
+                elif 'Array3' in topic_type:
+                    # Array3类型写入txt格式
+                    self.write_array3_data(topic_name, msg, receive_time)
+                else:
+                    # 其他类型写入txt格式
+                    self.write_other_data(topic_name, msg, receive_time)
                 
         return callback
     
-    def record_raw_data(self, topic_name, msg, receive_time, header_time):
-        """记录原始数据到CSV文件"""
+    def write_array3_data(self, topic_name, msg, receive_time):
+        """写入Array3类型的数据到txt文件 - 格式: 时间戳 换行 X 换行 Y 换行 Z 换行 30个* 换行"""
         try:
-            with self.file_lock:
-                writer = csv.writer(self.raw_data_files[topic_name])
-                timestamp = datetime.now().isoformat()
+            file_handle = self.data_files[topic_name]
+            
+            # 写入时间戳
+            file_handle.write(f"{receive_time}\n")
+            
+            # 提取并清理XYZ数据
+            if hasattr(msg, 'x') and hasattr(msg, 'y') and hasattr(msg, 'z'):
+                x_val = self.clean_single_float(msg.x)
+                y_val = self.clean_single_float(msg.y)
+                z_val = self.clean_single_float(msg.z)
                 
-                if hasattr(msg, 'x') and hasattr(msg, 'y') and hasattr(msg, 'z'):
-                    # Array3 类型
-                    writer.writerow([timestamp, receive_time, header_time, msg.x, msg.y, msg.z])
-                elif hasattr(msg, 'row1') and hasattr(msg, 'row2') and hasattr(msg, 'row3'):
-                    # Cloud 类型
-                    num_points = len(msg.row1) if msg.row1 else 0
-                    sample_points = f"[{msg.row1[:3] if msg.row1 else []}...]" if num_points > 0 else "[]"
-                    writer.writerow([timestamp, receive_time, header_time, num_points, sample_points])
-                elif hasattr(msg, 'data'):
-                    # Float32 类型
-                    writer.writerow([timestamp, receive_time, header_time, msg.data])
-                else:
-                    # 其他类型，记录摘要
-                    data_summary = str(msg)[:100] + "..." if len(str(msg)) > 100 else str(msg)
-                    writer.writerow([timestamp, receive_time, header_time, data_summary])
-                
-                # 刷新文件缓冲区
-                self.raw_data_files[topic_name].flush()
+                # 写入X, Y, Z，每个数据单独一行
+                file_handle.write(f"{x_val:.6f}\n")
+                file_handle.write(f"{y_val:.6f}\n")
+                file_handle.write(f"{z_val:.6f}\n")
+            else:
+                # 无效数据时写入-99
+                file_handle.write("-99.000000\n")
+                file_handle.write("-99.000000\n")
+                file_handle.write("-99.000000\n")
+            
+            # 写入30个*号作为分隔符
+            file_handle.write("*" * 30 + "\n")
+            file_handle.flush()
+            
         except Exception as e:
-            self.get_logger().error(f"记录原始数据失败 ({topic_name}): {str(e)}")
+            # 出错时写入错误信息
+            file_handle = self.data_files[topic_name]
+            file_handle.write(f"{receive_time}\n")
+            file_handle.write("-99.000000\n")
+            file_handle.write("-99.000000\n") 
+            file_handle.write("-99.000000\n")
+            file_handle.write("*" * 30 + "\n")
+            file_handle.flush()
 
-    def sync_and_write(self):
-        """基于时间窗口进行消息同步并写入，同时记录详细的同步分析"""
-        # 找到最新的共同时间点
-        latest_times = {}
-        for topic_name, buffer in self.msg_buffers.items():
-            if buffer:
-                latest_times[topic_name] = buffer[-1]['timestamp']
-        
-        if len(latest_times) < len(self.topic_types):
-            return  # 还没有所有话题的数据
-        
-        # 找到所有话题中最早的最新时间戳作为同步目标
-        sync_target = min(latest_times.values())
-        
-        # 为每个话题找到最接近同步目标的消息
-        synced_msgs = {}
-        max_time_diff = 0
-        timing_records = []
-        
-        for topic_name, buffer in self.msg_buffers.items():
-            best_msg = None
-            min_diff = float('inf')
-            
-            for msg_entry in reversed(buffer):  # 从最新开始搜索
-                time_diff = abs(msg_entry['timestamp'] - sync_target)
-                if time_diff < min_diff:
-                    min_diff = time_diff
-                    best_msg = msg_entry
-                    
-                # 如果时间差过大，停止搜索
-                if time_diff > self.sync_window_ns:
-                    break
-            
-            if best_msg and min_diff <= self.sync_window_ns:
-                synced_msgs[topic_name] = best_msg
-                max_time_diff = max(max_time_diff, min_diff)
-                
-                # 准备时间分析记录
-                data_summary = self.get_data_summary(best_msg['msg'])
-                timing_records.append({
-                    'topic_name': topic_name,
-                    'receive_time': best_msg['receive_time'],
-                    'header_time': best_msg['header_time'],
-                    'time_diff_from_sync_target': min_diff / 1e6,  # 转换为毫秒
-                    'data_summary': data_summary
-                })
-        
-        # 只有当所有话题都找到同步消息时才写入
-        if len(synced_msgs) == len(self.topic_types):
-            self.sync_group_counter += 1
-            
-            # 写入同步的rosbag数据
-            for topic_name, msg_entry in synced_msgs.items():
-                self.writer.write(
-                    topic_name,
-                    serialize_message(msg_entry['msg']),
-                    msg_entry['timestamp'])
-            
-            # 记录时间分析数据
-            self.record_timing_analysis(timing_records, sync_target, max_time_diff)
-            
-            # 记录同步质量
-            max_diff_ms = max_time_diff / 1e6
-            if max_diff_ms > 10:  # 超过10ms差异时警告
-                self.get_logger().warn(f"同步时间差异: {max_diff_ms:.1f}ms")
-            
-            # 定期报告同步状态
-            if self._sync_count % 100 == 0:
-                self.get_logger().info(f"已同步写入 {self._sync_count} 组数据，最大时间差: {max_diff_ms:.1f}ms")
-                self.get_logger().info(f"数据保存在: {self.unique_dir}")
-    
-    def get_data_summary(self, msg):
-        """获取消息数据摘要"""
-        if hasattr(msg, 'x') and hasattr(msg, 'y') and hasattr(msg, 'z'):
-            return f"Array3({msg.x:.3f}, {msg.y:.3f}, {msg.z:.3f})"
-        elif hasattr(msg, 'row1') and hasattr(msg, 'row2') and hasattr(msg, 'row3'):
-            num_points = len(msg.row1) if msg.row1 else 0
-            return f"Cloud({num_points} points)"
-        elif hasattr(msg, 'data'):
-            return f"Float32({msg.data:.6f})"
-        else:
-            return str(type(msg).__name__)
-    
-    def record_timing_analysis(self, timing_records, sync_target, max_time_diff):
-        """记录时间分析数据"""
+    def write_other_data(self, topic_name, msg, receive_time):
+        """写入其他类型数据到txt文件"""
         try:
-            with self.file_lock:
-                timestamp = datetime.now().isoformat()
+            file_handle = self.data_files[topic_name]
+            
+            # 写入时间戳
+            file_handle.write(f"{receive_time}\n")
+            
+            # 根据消息类型提取数据
+            if hasattr(msg, 'joint_position') and hasattr(msg, 'wrench'):
+                # LBRWrenchCommand类型 - 7个关节位置 + 6个力/力矩值
+                # 先写入7个关节位置
+                for pos in msg.joint_position:
+                    cleaned_pos = self.clean_single_float(pos)
+                    file_handle.write(f"{cleaned_pos:.6f}\n")
                 
-                # 记录每个话题的时间信息
-                for record in timing_records:
-                    self.timing_writer.writerow([
-                        timestamp,
-                        record['topic_name'],
-                        record['receive_time'],
-                        record['header_time'],
-                        self.sync_group_counter,
-                        record['time_diff_from_sync_target'],
-                        record['data_summary']
-                    ])
+                # 写入分隔换行
+                file_handle.write("\n")
                 
-                # 记录同步统计信息
-                sync_quality = "excellent" if max_time_diff / 1e6 < 5 else \
-                              "good" if max_time_diff / 1e6 < 10 else \
-                              "fair" if max_time_diff / 1e6 < 20 else "poor"
+                # 再写入6个扭矩值
+                for wrench_val in msg.wrench:
+                    cleaned_wrench = self.clean_single_float(wrench_val)
+                    file_handle.write(f"{cleaned_wrench:.6f}\n")
+            elif hasattr(msg, 'sample_time'):
+                # LBRState类型 - 复杂的状态数据
+                # 写入所有状态和关节数据
+                data_list = [
+                    msg.sample_time, msg.session_state, msg.connection_quality,
+                    msg.safety_state, msg.operation_mode, msg.drive_state,
+                    msg.client_command_mode, msg.overlay_type, msg.control_mode,
+                    msg.time_stamp_sec, msg.time_stamp_nano_sec
+                ]
+                data_list.extend(msg.measured_joint_position)
+                data_list.extend(msg.commanded_joint_position)
+                data_list.extend(msg.measured_torque)
+                data_list.extend(msg.commanded_torque)
+                data_list.extend(msg.external_torque)
+                data_list.extend(msg.ipo_joint_position)
+                data_list.append(msg.tracking_performance)
                 
-                self.sync_stats_writer.writerow([
-                    self.sync_group_counter,
-                    sync_target,
-                    max_time_diff / 1e6,
-                    len(timing_records),
-                    sync_quality,
-                    timestamp
-                ])
+                for val in data_list:
+                    cleaned_val = self.clean_single_float(val)
+                    file_handle.write(f"{cleaned_val:.6f}\n")
+            elif hasattr(msg, 'position') and hasattr(msg, 'velocity'):
+                # JointState类型
+                # 处理位置数据
+                pos = list(msg.position) if msg.position else []
+                vel = list(msg.velocity) if msg.velocity else []
+                eff = list(msg.effort) if hasattr(msg, 'effort') and msg.effort else []
                 
-                # 刷新文件缓冲区
-                self.timing_file.flush()
-                self.sync_stats_file.flush()
+                # 确保有7个关节的数据
+                while len(pos) < 7:
+                    pos.append(0.0)
+                while len(vel) < 7:
+                    vel.append(0.0)
+                while len(eff) < 7:
+                    eff.append(0.0)
                 
+                # 写入所有数据
+                for val in (pos[:7] + vel[:7] + eff[:7]):
+                    cleaned_val = self.clean_single_float(val)
+                    file_handle.write(f"{cleaned_val:.6f}\n")
+            elif hasattr(msg, 'data'):
+                # Float32类型
+                cleaned_val = self.clean_single_float(msg.data)
+                file_handle.write(f"{cleaned_val:.6f}\n")
+            else:
+                # 其他未知类型
+                file_handle.write("unknown_type\n")
+            
+            # 写入30个*号作为分隔符
+            file_handle.write("*" * 30 + "\n")
+            file_handle.flush()
+            
         except Exception as e:
-            self.get_logger().error(f"记录时间分析失败: {str(e)}")
+            # 出错时写入错误信息
+            file_handle = self.data_files[topic_name]
+            file_handle.write(f"{receive_time}\n")
+            file_handle.write("error_data\n")
+            file_handle.write("*" * 30 + "\n")
+            file_handle.flush()
+
+    def extract_csv_data(self, msg, receive_time):
+        """提取消息数据为CSV行数据"""
+        try:
+            row = [receive_time]
+            
+            # 根据消息类型提取数据
+            if hasattr(msg, 'joint_position') and hasattr(msg, 'wrench'):
+                # LBRWrenchCommand类型
+                row.extend(msg.joint_position)
+                row.extend(msg.wrench)
+            elif hasattr(msg, 'sample_time'):
+                # LBRState类型
+                row.extend([
+                    msg.sample_time, msg.session_state, msg.connection_quality,
+                    msg.safety_state, msg.operation_mode, msg.drive_state,
+                    msg.client_command_mode, msg.overlay_type, msg.control_mode,
+                    msg.time_stamp_sec, msg.time_stamp_nano_sec
+                ])
+                row.extend(msg.measured_joint_position)
+                row.extend(msg.commanded_joint_position)
+                row.extend(msg.measured_torque)
+                row.extend(msg.commanded_torque)
+                row.extend(msg.external_torque)
+                row.extend(msg.ipo_joint_position)
+                row.append(msg.tracking_performance)
+            elif hasattr(msg, 'position') and hasattr(msg, 'velocity'):
+                # JointState类型
+                # 确保有7个关节的数据，不足的用0填充
+                pos = list(msg.position) if msg.position else []
+                vel = list(msg.velocity) if msg.velocity else []
+                eff = list(msg.effort) if hasattr(msg, 'effort') and msg.effort else []
+                
+                # 填充到7个关节
+                while len(pos) < 7:
+                    pos.append(0.0)
+                while len(vel) < 7:
+                    vel.append(0.0)
+                while len(eff) < 7:
+                    eff.append(0.0)
+                
+                row.extend(pos[:7])  # 只取前7个
+                row.extend(vel[:7])
+                row.extend(eff[:7])
+            elif hasattr(msg, 'x') and hasattr(msg, 'y') and hasattr(msg, 'z'):
+                # Array3类型
+                row.extend([msg.x, msg.y, msg.z])
+            elif hasattr(msg, 'data'):
+                # Float32类型
+                row.append(msg.data)
+            else:
+                # 其他类型，作为字符串处理
+                row.append(str(msg)[:200])
+                
+            return row
+        except Exception as e:
+            # 出错时返回错误信息
+            return [receive_time, f"extract_error: {str(e)}"]
+    
+    def extract_data(self, msg):
+        """提取消息数据为字符串（保留用于兼容性）"""
+        try:
+            if hasattr(msg, 'x') and hasattr(msg, 'y') and hasattr(msg, 'z'):
+                # Array3 类型
+                return f"x={msg.x}, y={msg.y}, z={msg.z}"
+            elif hasattr(msg, 'row1') and hasattr(msg, 'row2') and hasattr(msg, 'row3'):
+                # Cloud 类型
+                try:
+                    num_points = len(msg.row1) if msg.row1 is not None else 0
+                    return f"points={num_points}"
+                except:
+                    return "points=0"
+            elif hasattr(msg, 'data'):
+                # Float32 类型
+                return str(msg.data)
+            elif hasattr(msg, 'position') and hasattr(msg, 'velocity'):
+                # JointState 类型
+                try:
+                    pos_str = ','.join(map(str, msg.position)) if msg.position is not None else ""
+                    vel_str = ','.join(map(str, msg.velocity)) if msg.velocity is not None else ""
+                    return f"pos=[{pos_str}], vel=[{vel_str}]"
+                except:
+                    return "pos=[], vel=[]"
+            else:
+                # 其他类型，返回字符串表示
+                return str(msg)[:200]  # 限制长度
+        except Exception as e:
+            return f"extract_error: {str(e)}"
+    
+    def write_cloud_data(self, topic_name, msg, receive_time, header_time):
+        """写入Cloud类型的数据到txt文件 - 20*20*3点阵，时间戳+XYZ分别换行+*号分隔"""
+        try:
+            file_handle = self.data_files[topic_name]
+            
+            # 写入时间戳信息
+            file_handle.write(f"{receive_time}\n")
+            
+            # 处理Cloud消息结构 - 每个row包含400个点的坐标
+            x_data = []
+            y_data = []
+            z_data = []
+            
+            if hasattr(msg, 'row1') and hasattr(msg, 'row2') and hasattr(msg, 'row3'):
+                # 处理X数据 (row1) - 400个X坐标
+                if msg.row1 is not None:
+                    x_raw = list(msg.row1)[:400]  # 取前400个点
+                    x_data = self.clean_float_array(x_raw, 400)
+                else:
+                    x_data = [-99.0] * 400
+                
+                # 处理Y数据 (row2) - 400个Y坐标
+                if msg.row2 is not None:
+                    y_raw = list(msg.row2)[:400]  # 取前400个点
+                    y_data = self.clean_float_array(y_raw, 400)
+                else:
+                    y_data = [-99.0] * 400
+                
+                # 处理Z数据 (row3) - 400个Z坐标
+                if msg.row3 is not None:
+                    z_raw = list(msg.row3)[:400]  # 取前400个点
+                    z_data = self.clean_float_array(z_raw, 400)
+                else:
+                    z_data = [-99.0] * 400
+            else:
+                # 如果没有有效数据，创建三组400个-99
+                x_data = [-99.0] * 400
+                y_data = [-99.0] * 400
+                z_data = [-99.0] * 400
+            
+            # 写入XYZ三行数据，每行400个点，用空格分隔
+            x_str = ' '.join(f"{value:.6f}" for value in x_data)
+            file_handle.write(f"{x_str}\n")
+            
+            y_str = ' '.join(f"{value:.6f}" for value in y_data)
+            file_handle.write(f"{y_str}\n")
+            
+            z_str = ' '.join(f"{value:.6f}" for value in z_data)
+            file_handle.write(f"{z_str}\n")
+            
+            # 写入*号分隔符
+            file_handle.write("*\n")
+            file_handle.flush()
+            
+        except Exception as e:
+            # 出错时写入错误信息
+            file_handle = self.data_files[topic_name]
+            file_handle.write(f"{receive_time}\n")
+            # 写入400个-99的XYZ数据
+            error_line = ' '.join(["-99.000000"] * 400)
+            file_handle.write(f"{error_line}\n")
+            file_handle.write(f"{error_line}\n") 
+            file_handle.write(f"{error_line}\n")
+            file_handle.write("*\n")
+            file_handle.flush()
+    
+    def clean_single_float(self, value):
+        """清理单个浮点数，处理NaN和无穷大等奇异值"""
+        import math
+        
+        try:
+            # 转换为浮点数
+            float_val = float(value)
+            
+            # 检查是否为NaN或无穷大
+            if math.isnan(float_val) or math.isinf(float_val):
+                return -99.0
+            # 检查是否为异常大的数值（绝对值超过1e10）
+            elif abs(float_val) > 1e10:
+                return -99.0
+            else:
+                return float_val
+        except (ValueError, TypeError):
+            # 转换失败时返回-99
+            return -99.0
+
+    def clean_float_array(self, raw_data, target_length):
+        """清理浮点数组，处理NaN和无穷大等奇异值"""
+        import math
+        
+        cleaned_data = []
+        for value in raw_data:
+            try:
+                # 转换为浮点数
+                float_val = float(value)
+                
+                # 检查是否为NaN或无穷大
+                if math.isnan(float_val) or math.isinf(float_val):
+                    cleaned_data.append(-99.0)
+                # 检查是否为异常大的数值（绝对值超过1e10）
+                elif abs(float_val) > 1e10:
+                    cleaned_data.append(-99.0)
+                else:
+                    cleaned_data.append(float_val)
+            except (ValueError, TypeError):
+                # 转换失败时用-99填充
+                cleaned_data.append(-99.0)
+        
+        # 确保数组长度正确
+        while len(cleaned_data) < target_length:
+            cleaned_data.append(-99.0)
+        
+        return cleaned_data[:target_length]
+    
+    def generate_summary(self):
+        """生成数据采集摘要"""
+        summary_file = os.path.join(self.unique_dir, 'summary.txt')
+        with open(summary_file, 'w') as f:
+            f.write("数据采集摘要\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"采集时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"数据目录: {self.unique_dir}\n")
+            f.write(f"监控话题数: {len(self.topic_types)}\n\n")
+            
+            f.write("话题列表和数据格式:\n")
+            for topic_name, topic_type in self.topic_types.items():
+                safe_name = topic_name.replace('/', '_').replace(':', '_')
+                if 'Cloud' in topic_type:
+                    f.write(f"  - {topic_name} -> {safe_name}.txt (Cloud数据: 时间戳+400个点的XYZ坐标，每组以*分隔)\n")
+                elif 'Array3' in topic_type:
+                    f.write(f"  - {topic_name} -> {safe_name}.txt (Array3数据: 时间戳+X+Y+Z，每组以30个*分隔)\n")
+                elif 'LBRWrenchCommand' in topic_type:
+                    f.write(f"  - {topic_name} -> {safe_name}.txt (Wrench数据: 时间戳+7个关节位置+换行+6个力/力矩值，每组以30个*分隔)\n")
+                else:
+                    f.write(f"  - {topic_name} -> {safe_name}.txt (其他数据: 时间戳+数据值，每组以30个*分隔)\n")
+            
+            f.write(f"\n数据格式说明:\n")
+            f.write(f"- Cloud数据: 时间戳 换行 400个X坐标(空格分隔) 换行 400个Y坐标 换行 400个Z坐标 换行 * 换行\n")
+            f.write(f"- Array3数据: 时间戳 换行 X 换行 Y 换行 Z 换行 30个* 换行\n")
+            f.write(f"- Wrench数据: 时间戳 换行 7个关节位置(每行一个) 换行 换行 6个力/力矩值(每行一个) 换行 30个* 换行\n")
+            f.write(f"- 其他数据: 时间戳 换行 数据值(每行一个) 换行 30个* 换行\n")
+            f.write(f"- 所有非法数据(NaN, 无穷大, 绝对值>1e10)记录为-99\n")
+        
+        self.get_logger().info(f"摘要已生成: {summary_file}")
+
+    def destroy_node(self):
+        """重写销毁节点方法，确保正确清理订阅"""
+        try:
+            # 清理订阅
+            if hasattr(self, '_subscriptions'):
+                for subscription in self._subscriptions:
+                    try:
+                        self.destroy_subscription(subscription)
+                    except Exception as e:
+                        self.get_logger().warn(f"清理订阅时出错: {str(e)}")
+                self._subscriptions.clear()
+            
+            # 关闭文件
+            for file_handle in self.data_files.values():
+                if not file_handle.closed:
+                    file_handle.close()
+        except Exception as e:
+            if hasattr(self, 'get_logger'):
+                self.get_logger().error(f"销毁节点时出错: {str(e)}")
+        finally:
+            # 调用父类的销毁方法
+            super().destroy_node()
     
     def __del__(self):
         """析构函数，确保文件正确关闭"""
         try:
-            for file_handle in self.raw_data_files.values():
+            for file_handle in self.data_files.values():
                 if not file_handle.closed:
                     file_handle.close()
-            
-            if hasattr(self, 'timing_file') and not self.timing_file.closed:
-                self.timing_file.close()
-            
-            if hasattr(self, 'sync_stats_file') and not self.sync_stats_file.closed:
-                self.sync_stats_file.close()
-                
         except Exception as e:
             if hasattr(self, 'get_logger'):
                 self.get_logger().error(f"关闭文件时出错: {str(e)}")
 
 
-class SimpleBagRecorder(Node):
-    def __init__(self):
-        super().__init__('dataset_recorder')
-        self.writer = rosbag2_py.SequentialWriter()
-
-        current_workspace_path = os.getcwd()
-        base_dir = os.path.join(current_workspace_path, 'training_data')
-        data_dir = os.path.join(base_dir, 'multi_topic_recorder')
-        os.makedirs(data_dir, exist_ok=True)
-
-        unique_dir = datetime.now().strftime('%Y%m%d_%H%M%S')
-        save_path = os.path.join(data_dir, unique_dir)
-
-        open_writer(self.writer, save_path)
-
-        # 所有话题（机械臂 + 左右传感器）
-        self.topic_types = {
-            # 机械臂话题
-            '/lbr/command/joint_position': 'lbr_fri_idl/msg/LBRJointPositionCommand',
-            '/lbr/state': 'lbr_fri_idl/msg/LBRState',
-            '/lbr/joint_states': 'sensor_msgs/msg/JointState',
-
-            # 右传感器（_r）
-            '/positions_r': 'tutorial_interfaces/msg/Cloud',
-            '/displacements_r': 'tutorial_interfaces/msg/Cloud',
-            '/forces_r': 'tutorial_interfaces/msg/Array3',
-            '/resultant_force_r': 'tutorial_interfaces/msg/Cloud',
-            '/resultant_moment_r': 'tutorial_interfaces/msg/Cloud',
-            '/index_r': 'std_msgs/msg/Float32',
-
-            # 左传感器（_l）
-            '/positions_l': 'tutorial_interfaces/msg/Cloud',
-            '/displacements_l': 'tutorial_interfaces/msg/Cloud',
-            '/forces_l': 'tutorial_interfaces/msg/Array3',
-            '/resultant_force_l': 'tutorial_interfaces/msg/Cloud',
-            '/resultant_moment_l': 'tutorial_interfaces/msg/Cloud',
-            '/index_l': 'std_msgs/msg/Float32'
-        }
-
-        self.msg_buffer = {
-            topic: deque(maxlen=100) for topic in self.topic_types
-        }
-
-        topic_id = 0
-        for topic_name, topic_type in self.topic_types.items():
-            topic_info = rosbag2_py._storage.TopicMetadata(
-                id=topic_id,
-                name=topic_name,
-                type=topic_type,
-                serialization_format='cdr')
-            self.writer.create_topic(topic_info)
-            topic_id += 1
-
-            msg_type = eval(topic_type.split('/')[2])
-
-            self._subscriptions.append(self.create_subscription(
-                msg_type,
-                topic_name,
-                self.msg_callback(topic_name),
-                10
-            ))
-
-        self.timer = self.create_timer(0.1, self.write_messages)  # 10Hz 定时器
-
-    def msg_callback(self, topic_name):
-        """创建消息回调函数，保存消息的原始时间戳"""
-        def callback(msg):
-            # 保存消息及其接收时间戳
-            receive_time = self.get_clock().now().nanoseconds
-            msg_data = {
-                'msg': msg,
-                'receive_time': receive_time,
-                'header_time': None
-            }
-            
-            # 如果消息有header，提取其时间戳
-            if hasattr(msg, 'header') and hasattr(msg.header, 'stamp'):
-                header_time = msg.header.stamp.sec * 1e9 + msg.header.stamp.nanosec
-                msg_data['header_time'] = header_time
-            
-            self.msg_buffer[topic_name].append(msg_data)
-                
-        return callback
-
-    def write_messages(self):
-        """将所有最新消息写入rosbag，使用消息的原始时间戳"""
-        latest_msgs = {}
-        now = self.get_clock().now().nanoseconds
-
-        # 检查是否所有话题都有数据
-        for topic in self.topic_types:
-            buffer = self.msg_buffer[topic]
-            if not buffer:
-                return  # 任意话题缺失则跳过写入
-
-            msg_data = buffer[-1]  # 最新一条消息
-            msg = msg_data['msg']
-            
-            # 优先使用header中的时间戳，否则使用接收时间
-            if msg_data['header_time'] is not None:
-                timestamp = int(msg_data['header_time'])
-            else:
-                timestamp = msg_data['receive_time']
-                
-            self.writer.write(
-                topic,
-                serialize_message(msg),
-                timestamp)
-
-        self.get_logger().info(f"写入完成 @ {now}")
-
-
 def main(args=None):
     rclpy.init(args=args)
     
-    # 可以在这里选择使用哪种记录器
-    print("选择数据记录方法:")
-    print("1. 简单记录器 (使用消息原始时间戳)")
-    print("2. 高级同步记录器 (基于时间窗口同步 + 详细分析)")
+    print("启动数据记录器...")
+    print("功能: 记录各个话题的数据和到达时间戳")
+    print()
     
+    recorder = None
     try:
-        choice = input("请输入选择 (1 或 2，默认为 2): ").strip()
-        if choice == "1":
-            recorder = SimpleBagRecorder()
-            print("使用简单记录器")
-        else:
-            recorder = AdvancedSyncBagRecorder(sync_window_ms=50)  # 50ms同步窗口
-            print("使用高级同步记录器 (50ms同步窗口)")
-            print(f"数据将保存到: {recorder.unique_dir}")
-    except (EOFError, KeyboardInterrupt):
-        recorder = AdvancedSyncBagRecorder(sync_window_ms=50)
-        print("使用默认的高级同步记录器")
+        recorder = DatasetRecorder()
         print(f"数据将保存到: {recorder.unique_dir}")
-    
-    try:
+        print("按 Ctrl+C 停止记录")
+        print()
+        
         rclpy.spin(recorder)
     except KeyboardInterrupt:
         print("\n正在停止数据记录...")
+    except Exception as e:
+        print(f"启动失败: {e}")
     finally:
-        # 如果是高级记录器，生成最终分析报告
-        if isinstance(recorder, AdvancedSyncBagRecorder):
-            print("正在生成分析报告...")
-            recorder.generate_analysis_report()
+        if recorder is not None:
+            print("正在生成摘要...")
+            recorder.generate_summary()
             print(f"所有数据已保存到: {recorder.unique_dir}")
-            print("包含以下内容:")
-            print(f"  - ROS bag文件: {recorder.rosbag_dir}")
-            print(f"  - 原始数据CSV: {recorder.raw_data_dir}")
-            print(f"  - 分析文件: {recorder.analysis_dir}")
+            try:
+                recorder.destroy_node()
+            except Exception as e:
+                print(f"销毁节点时出错: {e}")
         
-        recorder.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception as e:
+            print(f"关闭ROS时出错: {e}")
 
 
 if __name__ == '__main__':

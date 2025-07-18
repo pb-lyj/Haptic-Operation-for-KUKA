@@ -15,30 +15,28 @@ def generate_launch_description():
         ExecuteProcess(
             cmd=[
                 'ros2', 'launch', 'lbr_bringup', 'hardware.launch.py',
-                'sim:=false',
-                'ctrl:=lbr_joint_position_command_controller',
+                'ctrl:=lbr_wrench_command_controller',
                 'model:=iiwa14'
             ],
             shell=True
         ),
 
-        # 启动 admittance_control 控制器，设置 namespace 为 /lbr
+        # # 启动改进的阻抗控制器（含示教功能）
         Node(
-            package='lbr_demos_advanced_py',
-            executable='admittance_control',
+            package='haptic',
+            executable='admittance_with_zero_reset',
             namespace='lbr',
-            name='admittance_control',
-            parameters=[admittance_param],
+            name='admittance_with_zero_reset',
             output='screen'
         ),
 
         # 启动Launch控制的数据采集器节点
-        Node(
-            package='haptic',
-            executable='dataset_recorder_launch',
-            name='dataset_recorder',
-            output='screen'
-        ),
+        # Node(
+        #     package='haptic',
+        #     executable='dataset_recorder_launch',
+        #     name='dataset_recorder',
+        #     output='screen'
+        # ),
 
         # 启动 Tac3D 后端服务进程（C++运行库）
         ExecuteProcess(

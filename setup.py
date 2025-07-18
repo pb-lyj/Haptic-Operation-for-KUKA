@@ -30,9 +30,13 @@ setup(
         'console_scripts': [
             'tac3d_r = haptic.tac3d_r:main',
             'tac3d_l = haptic.tac3d_l:main',
+            
             'reset = haptic.reset:main',
+            'admittance_with_zero_reset = haptic.admittance_with_zero_reset:main',
+            
             'dataset_recorder = haptic.dataset_recorder_improved:main',
-            'dataset_recorder_launch = haptic.dataset_recorder_launch:main',
+            'dataset_recorder_for_launch = haptic.dataset_recorder_for_launch:main',
+            'test_force = haptic.test_force:main',
         ],
     },
 )
